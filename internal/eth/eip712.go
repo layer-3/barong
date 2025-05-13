@@ -77,30 +77,51 @@ func ComputeEIP712Hash(domainSeparator, messageHash [32]byte) [32]byte {
 	return crypto.Keccak256Hash(data)
 }
 
-// VerifySignature checks whether the provided signature corresponds to the given public key and message data.
-func VerifySignature(domain EIP712Domain, msg NonceMessage, sig []byte, signerPubKey *ecdsa.PublicKey) (bool, error) {
+// Common function to handle the signature verification process
+func verifySignatureCommon(domain EIP712Domain, msg NonceMessage, sig []byte) (*ecdsa.PublicKey, error) {
 	if len(sig) != 65 {
-		return false, errors.New("signature must be 65 bytes (r, s, v)")
+		return nil, errors.New("signature must be 65 bytes (r, s, v)")
 	}
 
 	domainSeparator := ComputeDomainSeparator(domain)
 	messageHash := ComputeMessageHash(msg)
 	finalHash := ComputeEIP712Hash(domainSeparator, messageHash)
 
-	// Ecrecover to get the raw public key bytes.
-	recoveredPub, err := crypto.Ecrecover(finalHash[:], sig)
+	// Ecrecover to get the raw public key bytes
+	recoveredPubBytes, err := crypto.Ecrecover(finalHash[:], sig)
 	if err != nil {
-		return false, fmt.Errorf("error recovering public key: %v", err)
+		return nil, fmt.Errorf("error recovering public key: %w", err)
 	}
 
-	// Convert recovered bytes to an ecdsa.PublicKey.
-	recoveredKey, err := crypto.UnmarshalPubkey(recoveredPub)
+	// Convert recovered bytes to an ecdsa.PublicKey
+	recoveredPubKey, err := crypto.UnmarshalPubkey(recoveredPubBytes)
 	if err != nil {
-		return false, fmt.Errorf("error unmarshalling pubkey: %v", err)
+		return nil, fmt.Errorf("error unmarshalling pubkey: %w", err)
 	}
 
-	matches := (recoveredKey.X.Cmp(signerPubKey.X) == 0 && recoveredKey.Y.Cmp(signerPubKey.Y) == 0)
+	return recoveredPubKey, nil
+}
+
+// VerifySignature checks whether the provided signature corresponds to the given public key and message data.
+func VerifySignature(domain EIP712Domain, msg NonceMessage, sig []byte, signerPubKey *ecdsa.PublicKey) (bool, error) {
+	recoveredPubKey, err := verifySignatureCommon(domain, msg, sig)
+	if err != nil {
+		return false, err
+	}
+
+	matches := (recoveredPubKey.X.Cmp(signerPubKey.X) == 0 && recoveredPubKey.Y.Cmp(signerPubKey.Y) == 0)
 	return matches, nil
+}
+
+// VerifySignature checks whether the provided signature corresponds to the given address and message data.
+func VerifySignatureAgainstAddress(domain EIP712Domain, msg NonceMessage, sig []byte, expectedAddress common.Address) (bool, error) {
+	recoveredPubKey, err := verifySignatureCommon(domain, msg, sig)
+	if err != nil {
+		return false, err
+	}
+
+	recoveredAddress := crypto.PubkeyToAddress(*recoveredPubKey)
+	return recoveredAddress == expectedAddress, nil
 }
 
 // GenerateKeyPair creates a new private/public keypair for demonstration or testing.

@@ -1,23 +1,29 @@
 package main
 
 import (
-	"context"
 	"log"
-	"net/http"
 	"os"
-	"os/signal"
-	"syscall"
-	"time"
+
+	"crypto/ecdsa"
+	"crypto/elliptic"
+	"crypto/rand"
 
 	"github.com/ThreeDotsLabs/watermill"
 	"github.com/ThreeDotsLabs/watermill-redisstream/pkg/redisstream"
-	"github.com/layer-3/barong"
-	"github.com/layer-3/barong/internal/eth"
+	"github.com/layer-3/barong/adapters/events"
+	"github.com/layer-3/barong/adapters/store"
+	"github.com/layer-3/barong/adapters/tokenizer"
+	"github.com/layer-3/barong/service"
+	"github.com/layer-3/barong/transport/http"
+	"github.com/redis/go-redis/v9"
 )
 
 func main() {
-	ctx := context.Background()
-	logger := watermill.NewStdLogger(false, false)
+	// Generate a new ECDSA key pair (you would normally load this from somewhere secure)
+	privateKey, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	if err != nil {
+		panic(err)
+	}
 
 	// Get Redis URL from environment
 	redisURL := os.Getenv("REDIS_URL")
@@ -25,69 +31,37 @@ func main() {
 		redisURL = "redis://localhost:6379/0"
 	}
 
-	// Initialize Redis store
-	store, err := barong.NewRedisStore(ctx, redisURL)
+	// Parse Redis URL and create client
+	opts, err := redis.ParseURL(redisURL)
 	if err != nil {
-		log.Fatalf("Failed to connect to Redis: %v", err)
+		log.Fatalf("Failed to parse Redis URL: %v", err)
 	}
+
+	redisClient := redis.NewClient(opts)
 
 	// Initialize Watermill Redis publisher
-	publisherConfig := redisstream.PublisherConfig{
-		Client: store.GetClient(), // We'll need to expose this method in RedisStore
-	}
-
-	publisher, err := redisstream.NewPublisher(publisherConfig, logger)
+	logger := watermill.NewStdLogger(false, false)
+	publisher, err := redisstream.NewPublisher(
+		redisstream.PublisherConfig{
+			Client: redisClient,
+		},
+		logger,
+	)
 	if err != nil {
-		log.Fatalf("Failed to create Watermill publisher: %v", err)
-	}
-	defer publisher.Close()
-
-	// Generate or load ES256 signing key
-	// In a production environment, you would load this from a secure place
-	privKey, _, err := eth.GenerateKeyPair()
-	if err != nil {
-		log.Fatalf("Failed to generate keypair: %v", err)
+		log.Fatalf("Failed to create Redis publisher: %v", err)
 	}
 
-	// Create local signer with the key
-	signer := eth.NewLocalSigner(privKey)
+	tokenizer := tokenizer.NewJWTTokenizer(privateKey)
+	store := store.NewRedisStore(redisClient)
+	eventPub := events.NewWatermillPublisher(publisher)
 
-	// Register ES256 signer with JWT
-	eth.RegisterES256Signer()
+	authService := service.NewAuthService(tokenizer, store, eventPub)
 
-	// Create service
-	service := barong.NewService(store, signer, publisher)
+	// Setup Gin router
+	router := http.SetupRouter(authService)
 
-	// Create server
-	server := &http.Server{
-		Addr:    ":8080",
-		Handler: service.Router(),
+	// Start server
+	if err := router.Run(":9000"); err != nil {
+		log.Fatalf("Failed to start server: %v", err)
 	}
-
-	// Start server in a goroutine
-	go func() {
-		if err := server.ListenAndServe(); err != nil && err != http.ErrServerClosed {
-			log.Fatalf("Failed to start server: %v", err)
-		}
-	}()
-
-	log.Println("Server started on :8080")
-
-	// Wait for interrupt signal to gracefully shut down the server
-	quit := make(chan os.Signal, 1)
-	signal.Notify(quit, syscall.SIGINT, syscall.SIGTERM)
-	<-quit
-
-	log.Println("Shutting down server...")
-
-	// Create a deadline for server shutdown
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-	defer cancel()
-
-	// Shutdown the server
-	if err := server.Shutdown(ctx); err != nil {
-		log.Fatalf("Server forced to shutdown: %v", err)
-	}
-
-	log.Println("Server exited gracefully")
 }
