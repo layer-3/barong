@@ -7,7 +7,7 @@ require (
 	github.com/ThreeDotsLabs/watermill-redisstream v1.4.2
 	github.com/ethereum/go-ethereum v1.16.8
 	github.com/gin-gonic/gin v1.9.1
-	github.com/golang-jwt/jwt/v5 v5.2.2
+	github.com/golang-jwt/jwt/v5 v5.3.0
 	github.com/google/uuid v1.6.0
 	github.com/layer-3/clearsync v0.0.129
 	github.com/redis/go-redis/v9 v9.8.0
