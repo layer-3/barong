@@ -12,7 +12,7 @@ require (
 	github.com/layer-3/clearsync v0.0.129
 	github.com/redis/go-redis/v9 v9.8.0
 	github.com/shopspring/decimal v1.4.0
-	github.com/stretchr/testify v1.10.0
+	github.com/stretchr/testify v1.11.1
 )
 
 require (
